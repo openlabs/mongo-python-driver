@@ -254,15 +254,18 @@ class Connection(common.BaseObject):
                                      "2.6 you must install the ssl package "
                                      "from PyPI.")
 
-        if options.get('use_greenlets', False):
-            if not pool.have_greenlet:
-                raise ConfigurationError(
-                    "The greenlet module is not available. "
-                    "Install the greenlet package from PyPI."
-                )
-            self.pool_class = pool.GreenletPool
+	if options.get('_pool_class'):
+	    self.pool_class = options['_pool_class']
         else:
-            self.pool_class = pool.Pool
+	    if options.get('use_greenlets', False):
+		if not pool.have_greenlet:
+		    raise ConfigurationError(
+			"The greenlet module is not available. "
+			"Install the greenlet package from PyPI."
+		    )
+		self.pool_class = pool.GreenletPool
+	    else:
+		self.pool_class = pool.Pool
 
         self.__pool = self.pool_class(
             None,

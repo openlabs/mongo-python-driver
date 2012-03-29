@@ -211,15 +211,18 @@ class ReplicaSetConnection(common.BaseObject):
             option, value = common.validate(option, value)
             self.__opts[option] = value
 
-        if self.__opts.get('use_greenlets', False):
-            if not pool.have_greenlet:
-                raise ConfigurationError(
-                    "The greenlet module is not available. "
-                    "Install the greenlet package from PyPI."
-                )
-            self.pool_class = pool.GreenletPool
+	if self.__opts.get('_pool_class'):
+	    self.pool_class = self.__opts['_pool_class']
         else:
-            self.pool_class = pool.Pool
+	    if self.__opts.get('use_greenlets', False):
+		if not pool.have_greenlet:
+		    raise ConfigurationError(
+			"The greenlet module is not available. "
+			"Install the greenlet package from PyPI."
+		    )
+		self.pool_class = pool.GreenletPool
+	    else:
+		self.pool_class = pool.Pool
 
         self.__auto_start_request = self.__opts.get('auto_start_request', True)
         self.__in_request = self.__auto_start_request

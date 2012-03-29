@@ -15,7 +15,6 @@
 """Test the cursor module."""
 import unittest
 import random
-import warnings
 import sys
 import itertools
 sys.path[0:0] = [""]
@@ -25,7 +24,6 @@ from nose.plugins.skip import SkipTest
 from bson.code import Code
 from pymongo import (ASCENDING,
                      DESCENDING)
-from pymongo.cursor import Cursor
 from pymongo.database import Database
 from pymongo.errors import (InvalidOperation,
                             OperationFailure)
@@ -703,6 +701,12 @@ class TestCursor(unittest.TestCase):
         self.assertEqual(99, self.db.test.find()[99]['i'])
 
         self.assertRaises(IndexError, lambda x: self.db.test.find()[x], -1)
+
+    def test_getitem_index_out_of_range(self):
+	self.db.drop_collection("test")
+	for i in range(100):
+	    self.db.test.save({"i": i})
+
         self.assertRaises(IndexError, lambda x: self.db.test.find()[x], 100)
         self.assertRaises(IndexError,
                           lambda x: self.db.test.find().skip(50)[x], 50)

@@ -482,11 +482,22 @@ with contextlib.closing(conn):
     self.assertEqual("bar", conn.pymongo_test.test.find_one()["foo"])
 self.assertEqual(0, len(conn._Connection__pool.sockets))
 """
+	# Calling conn.close() has reset the pool
+	self.assertEqual(0, len(conn._Connection__pool.sockets))
 
+    def test_contextlib_auto_start_request(self):
+	if sys.version_info < (2, 6):
+	    raise SkipTest()
+
+	import contextlib
+
+	# We need exec here because if the Python version is less than 2.6
+	# these with-statements won't even compile.
         exec """
-with get_connection() as connection:
-    self.assertEqual("bar", connection.pymongo_test.test.find_one()["foo"])
-    # Calling conn.close() has reset the pool
+with get_connection(auto_start_request=True) as connection:
+    connection.pymongo_test.test.find_one()
+    # The connection is in a request, so the socket wasn't returned to the
+    # general pool
     self.assertEqual(0, len(connection._Connection__pool.sockets))
 """
 
@@ -569,9 +580,11 @@ with conn.start_request() as request:
         self.assertTrue(conn.in_request())
         pool = conn._Connection__pool
 
-        # Request started already, just from Connection constructor - it's a
-        # bit weird, but Connection does some socket stuff when it initializes
-        # and it ends up with a request socket
+	# Ensure Connection allocates a socket for this request (currently it
+	# ends up with a request socket simply from doing
+	# admin.command('isMaster') in its startup sequence, but we don't need
+	# to rely on that for this test to pass)
+	conn.test.test.find_one()
         self.assertRequestSocket(pool)
         self.assertSameSock(pool)
 

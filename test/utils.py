@@ -21,7 +21,7 @@ import time
 
 from nose.plugins.skip import SkipTest
 
-from pymongo import pool
+import pymongo.pool
 
 def delay(sec):
     return '''function() {
@@ -60,7 +60,7 @@ def force_reclaim_sockets(cx_pool, n_expected):
     # the local attribute with the same name is accessed from a different
     # thread. This assert checks that the thread-local is indeed local, and
     # also triggers the cleanup so the socket is reclaimed.
-    if isinstance(cx_pool, pool.Pool):
+    if isinstance(cx_pool, pymongo.pool.Pool):
         assert cx_pool.local.sock_info is None
 
     # In PyPy, we need to try for a while to make garbage-collection call

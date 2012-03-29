@@ -101,7 +101,12 @@ class TestCollection(unittest.TestCase):
         self.assertRaises(TypeError, db.test.create_index, {"hello": 1})
         self.assertRaises(ValueError, db.test.create_index, [])
 
+	# Ensure there's a 'test' collection in the pymongo_test database, so
+	# that the _id index is present
+	db.test.insert({}, safe=True)
         db.test.drop_indexes()
+
+	# Only the _id index, which cannot be dropped, remains
         self.assertEqual(db.system.indexes.find({"ns": u"pymongo_test.test"})
                          .count(), 1)
 

@@ -138,6 +138,15 @@ class Cursor(object):
         """
         return self.__collection
 
+    @property
+    def slave_okay(self):
+	"""If True, operations on slaves or replica-set secondaries will be
+	permitted.
+
+	.. versionadded:: 2.2+
+	"""
+	return self.__slave_okay
+
     def __del__(self):
         if self.__id and not self.__killed:
             self.__die()

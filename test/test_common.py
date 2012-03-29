@@ -47,9 +47,9 @@ class TestCommon(unittest.TestCase):
         self.assertFalse(coll.safe)
         self.assertEqual({}, coll.get_lasterror_options())
         cursor = coll.find()
-        self.assertFalse(cursor._Cursor__slave_okay)
+	self.assertFalse(cursor.slave_okay)
         cursor = coll.find(slave_okay=True)
-        self.assertTrue(cursor._Cursor__slave_okay)
+	self.assertTrue(cursor.slave_okay)
 
         c = Connection(pair, slaveok=True, w='majority',
                                      wtimeout=300, fsync=True, j=True)
@@ -66,9 +66,9 @@ class TestCommon(unittest.TestCase):
         self.assertTrue(coll.safe)
         self.assertEqual(d, coll.get_lasterror_options())
         cursor = coll.find()
-        self.assertTrue(cursor._Cursor__slave_okay)
+	self.assertTrue(cursor.slave_okay)
         cursor = coll.find(slave_okay=False)
-        self.assertFalse(cursor._Cursor__slave_okay)
+	self.assertFalse(cursor.slave_okay)
 
         c = Connection('mongodb://%s/?'
                        'w=2;wtimeoutMS=300;fsync=true;'
@@ -93,9 +93,9 @@ class TestCommon(unittest.TestCase):
         self.assertTrue(coll.safe)
         self.assertEqual(d, coll.get_lasterror_options())
         cursor = coll.find()
-        self.assertTrue(cursor._Cursor__slave_okay)
+	self.assertTrue(cursor.slave_okay)
         cursor = coll.find(slave_okay=False)
-        self.assertFalse(cursor._Cursor__slave_okay)
+	self.assertFalse(cursor.slave_okay)
 
         c.unset_lasterror_options()
         self.assertTrue(c.slave_okay)
@@ -114,9 +114,9 @@ class TestCommon(unittest.TestCase):
         self.assertFalse(coll.safe)
         self.assertEqual({}, coll.get_lasterror_options())
         cursor = coll.find()
-        self.assertFalse(cursor._Cursor__slave_okay)
+	self.assertFalse(cursor.slave_okay)
         cursor = coll.find(slave_okay=True)
-        self.assertTrue(cursor._Cursor__slave_okay)
+	self.assertTrue(cursor.slave_okay)
 
         coll.set_lasterror_options(j=True)
         self.assertEqual({'j': True}, coll.get_lasterror_options())
@@ -135,11 +135,11 @@ class TestCommon(unittest.TestCase):
         self.assertFalse(c.slave_okay)
         self.assertFalse(coll.slave_okay)
         cursor = coll.find()
-        self.assertFalse(cursor._Cursor__slave_okay)
+	self.assertFalse(cursor.slave_okay)
         cursor = db.coll2.find()
-        self.assertTrue(cursor._Cursor__slave_okay)
+	self.assertTrue(cursor.slave_okay)
         cursor = db.coll2.find(slave_okay=False)
-        self.assertFalse(cursor._Cursor__slave_okay)
+	self.assertFalse(cursor.slave_okay)
 
         self.assertRaises(ConfigurationError, coll.set_lasterror_options, foo=20)
         self.assertRaises(TypeError, coll._BaseObject__set_slave_okay, 20)

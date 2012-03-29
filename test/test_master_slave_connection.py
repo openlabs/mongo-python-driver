@@ -80,17 +80,17 @@ class TestMasterSlaveConnection(unittest.TestCase):
             def disconnect(self):
                 self._disconnects += 1
 
-        self.connection._MasterSlaveConnection__master = Connection()
-        self.connection._MasterSlaveConnection__slaves = [Connection(),
+	self.connection.master = Connection()
+	self.connection.slaves = [Connection(),
                                                           Connection()]
 
         self.connection.disconnect()
         self.assertEqual(1,
-            self.connection._MasterSlaveConnection__master._disconnects)
+	    self.connection.master._disconnects)
         self.assertEqual(1,
-            self.connection._MasterSlaveConnection__slaves[0]._disconnects)
+	    self.connection.slaves[0]._disconnects)
         self.assertEqual(1,
-            self.connection._MasterSlaveConnection__slaves[1]._disconnects)
+	    self.connection.slaves[1]._disconnects)
 
     def test_continue_until_slave_works(self):
         class Slave(object):
@@ -119,7 +119,7 @@ class TestMasterSlaveConnection(unittest.TestCase):
                 NotRandomList.last_idx = idx
                 return self._items.pop(0)
 
-        self.connection._MasterSlaveConnection__slaves = NotRandomList()
+	self.connection.slaves = NotRandomList()
 
         response = self.connection._send_message_with_response('message')
         self.assertEqual((NotRandomList.last_idx, 'sent'), response)
@@ -150,7 +150,7 @@ class TestMasterSlaveConnection(unittest.TestCase):
             def __getitem__(self, idx):
                 return self._items.pop(0)
 
-        self.connection._MasterSlaveConnection__slaves = NotRandomList()
+	self.connection.slaves = NotRandomList()
 
         self.assertRaises(AutoReconnect,
             self.connection._send_message_with_response, 'message')
@@ -261,14 +261,19 @@ class TestMasterSlaveConnection(unittest.TestCase):
 
         self.db.test.remove({})
         self.db.test.insert({"x": 5586})
-        time.sleep(11)
+
+	found = False
         for _ in range(10):
             try:
-                if 5586 != self.db.test.find_one()["x"]:
-                    count += 1
-            except:
-                count += 1
-        self.assertFalse(count)
+		if 5586 == self.db.test.find_one()["x"]:
+		    found = True
+		    break
+	    except Exception:
+		pass
+
+	    time.sleep(1)
+
+	self.assertTrue(found)
 
     def test_kill_cursors(self):
 
