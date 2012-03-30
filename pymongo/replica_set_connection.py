@@ -481,7 +481,8 @@ class ReplicaSetConnection(common.BaseObject):
                 if host in self.__pools:
                     mongo = self.__pools[host]
                     sock_info = self.__socket(mongo)
-                    res = self.__simple_command(sock_info, 'admin', {'ismaster': 1})
+		    res = self.__simple_command(
+			sock_info, 'admin', {'ismaster': 1})
                     mongo['pool'].return_socket(sock_info)
                 else:
                     res, conn = self.__is_master(host)
