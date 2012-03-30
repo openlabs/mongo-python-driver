@@ -204,16 +204,16 @@ class ReplicaSetConnection(common.BaseObject):
             password = res['password']
             db_name = res['database']
             self.__opts = res['options']
-        else:
-            self.__seeds.update(uri_parser.split_hosts(hosts_or_uri))
+	else:
+	    self.__seeds.update(uri_parser.split_hosts(hosts_or_uri))
 
-        for option, value in kwargs.iteritems():
-            option, value = common.validate(option, value)
-            self.__opts[option] = value
+	self.pool_class = kwargs.pop('_pool_class', None)
 
-	if self.__opts.get('_pool_class'):
-	    self.pool_class = self.__opts['_pool_class']
-        else:
+	for option, value in kwargs.iteritems():
+	    option, value = common.validate(option, value)
+	    self.__opts[option] = value
+
+	if not self.pool_class:
 	    if self.__opts.get('use_greenlets', False):
 		if not pool.have_greenlet:
 		    raise ConfigurationError(

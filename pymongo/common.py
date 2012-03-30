@@ -109,14 +109,6 @@ def validate_read_preference(dummy, value):
     return value
 
 
-def validate_pool(dummy, value):
-    """Validate _pool_class for Connection and ReplicaSetConnection
-    """
-    if not issubclass(value, BasePool):
-	raise ConfigurationError("Not a valid _pool_class")
-    return value
-
-
 # jounal is an alias for j,
 # wtimeoutms is an alias for wtimeout
 VALIDATORS = {
@@ -136,7 +128,6 @@ VALIDATORS = {
     'read_preference': validate_read_preference,
     'auto_start_request': validate_boolean,
     'use_greenlets': validate_boolean,
-    '_pool_class': validate_pool,
 }
 
 
