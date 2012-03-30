@@ -61,7 +61,7 @@ def async_test_engine(timeout_sec=5):
 	raise TypeError(
 	    "Expected int or float, got %s\n"
 	    "Use async_test_engine like:\n\t@async_test_engine()\n"
-	    "or:\n\t@async_test_engine(5)" % (
+	    "or:\n\t@async_test_engine(timeout_sec=10)" % (
 		repr(timeout_sec)
 		)
 	)

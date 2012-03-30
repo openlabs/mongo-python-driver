@@ -23,13 +23,13 @@ from tornado import ioloop, iostream, gen, stack_context
 import greenlet
 
 import pymongo
-from pymongo.pool import BasePool, NO_REQUEST
 import pymongo.master_slave_connection
 import pymongo.database
 import pymongo.collection
 import pymongo.son_manipulator
-from pymongo.errors import InvalidOperation
-
+import pymongo.errors
+from pymongo import common
+from pymongo.pool import BasePool, NO_REQUEST
 
 # Hook for unittesting; if true all MotorSockets get unique ids
 socket_uuid = False
@@ -39,16 +39,14 @@ __all__ = ['MotorConnection', 'MotorReplicaSetConnection']
 # TODO: sphinx-formatted docstrings
 # TODO: note you can't use from multithreaded app, consider special checks
 # to prevent it?
-# TODO: change all asserts into pymongo.error exceptions
-# TODO: set default timeout to None, document that, ensure we're doing
-#   timeouts as efficiently as possible
+# TODO: document that default timeout is None, ensure we're doing
+#   timeouts as efficiently as possible, test performance hit with timeouts
+#   from registering and cancelling timeouts
 # TODO: examine & document what connection and network timeouts mean here
 # TODO: verify cursors are closed ASAP
 # TODO: document use of MotorConnection.delegate, MotorDatabase.delegate, etc.
 # TODO: check handling of safe and get_last_error_options() and kwargs in
 #   Collection, make sure we respect them
-# TODO: What's with this warning when running tests?:
-#   "WARNING:root:Connect error on fd 6: [Errno 8] nodename nor servname provided, or not known"
 # TODO: test tailable cursor, write up a standard means of tailing a cursor
 #   forever, to be packaged with Motor
 # TODO: SSL
@@ -282,7 +280,6 @@ def asynchronize(sync_method, has_safe_arg, cb_required):
 
 	# TODO: document that with a callback passed in, Motor's default is
 	# to do SAFE writes, unlike PyMongo.
-	# ALSO TODO: should Motor's default be safe writes, or no?
 	# TODO: what about PyMongo BaseObject's underlying safeness, as well
 	# as w, wtimeout, and j? how do they affect control? test that.
 	if 'safe' not in kwargs and has_safe_arg:
@@ -419,7 +416,6 @@ class MotorConnectionBase(MotorBase):
 	Actually connect, passing self to a callback when connected.
 	@param callback: Optional function taking parameters (connection, error)
 	"""
-	# TODO: connect on demand? Remove open() as a public method?
 	check_callable(callback)
 
 	if self.connected:
@@ -455,7 +451,7 @@ class MotorConnectionBase(MotorBase):
 	    msg = "Can't access database on %s before calling open()" % (
 		self.__class__.__name__
 	    )
-	    raise InvalidOperation(msg)
+	    raise pymongo.errors.InvalidOperation(msg)
 
 	return MotorDatabase(self, name)
 
@@ -769,9 +765,10 @@ class MotorCollection(MotorBase):
 	"""
 	Get a MotorCursor.
 	"""
-	assert 'callback' not in kwargs, (
-	    "Pass a callback to each, to_list, count, or tail, not to find"
-	)
+	if 'callback' in kwargs:
+	    raise pymongo.errors.ConfigurationError(
+		"Pass a callback to each, to_list, count, or tail, not to find"
+	    )
 
 	cursor = self.delegate.find(*args, **kwargs)
 	return MotorCursor(cursor)
@@ -850,7 +847,7 @@ class MotorCursor(MotorBase):
 	@param callback:    function taking parameters (batch_size, error)
 	"""
 	if self.started and not self.alive:
-	    raise InvalidOperation(
+	    raise pymongo.errors.InvalidOperation(
 		"Can't call get_more() on a MotorCursor that has been"
 		" exhausted or killed."
 	    )
