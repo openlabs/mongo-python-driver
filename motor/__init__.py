@@ -37,23 +37,30 @@ socket_uuid = False
 __all__ = ['MotorConnection', 'MotorReplicaSetConnection']
 
 # TODO: sphinx-formatted docstrings
-# TODO: note you can't use from multithreaded app, consider special checks
-# to prevent it?
+# TODO: document that all Motor methods accept a callback, but only
+#   some require them. Get that into Sphinx for each async method somehow
+# TODO: note you can't use from multithreaded app, can't fork, consider special
+#   checks to prevent it?
 # TODO: document that default timeout is None, ensure we're doing
 #   timeouts as efficiently as possible, test performance hit with timeouts
 #   from registering and cancelling timeouts
 # TODO: examine & document what connection and network timeouts mean here
 # TODO: verify cursors are closed ASAP
 # TODO: document use of MotorConnection.delegate, MotorDatabase.delegate, etc.
-# TODO: check handling of safe and get_last_error_options() and kwargs in
-#   Collection, make sure we respect them
-# TODO: test tailable cursor, write up a standard means of tailing a cursor
-#   forever, to be packaged with Motor
-# TODO: SSL
+# TODO: document that with a callback passed in, Motor's default is
+#   to do SAFE writes, unlike PyMongo.
+# TODO: what about PyMongo BaseObject's underlying safeness, as well
+#   as w, wtimeout, and j? how do they affect control? test that.
+# TODO: check handling of safe and get_last_error_options() and kwargs,
+#   make sure we respect them
+# TODO: test tailable cursor a little more
+# TODO: SSL, IPv6
 # TODO: document which versions of greenlet and tornado this has been tested
 #   against, include those in some file that pip or pypi can understand?
 # TODO: document requests and describe how concurrent ops are prevented,
 #   demo how to avoid errors. Describe using NullContext to clear request.
+# TODO: document that Motor doesn't do auto_start_request
+
 
 def check_callable(kallable, required=False):
     if required and not kallable:
@@ -278,10 +285,6 @@ def asynchronize(sync_method, has_safe_arg, cb_required):
 	    kwargs = kwargs.copy()
 	    del kwargs['callback']
 
-	# TODO: document that with a callback passed in, Motor's default is
-	# to do SAFE writes, unlike PyMongo.
-	# TODO: what about PyMongo BaseObject's underlying safeness, as well
-	# as w, wtimeout, and j? how do they affect control? test that.
 	if 'safe' not in kwargs and has_safe_arg:
 	    kwargs['safe'] = bool(callback)
 
@@ -381,12 +384,6 @@ class MotorBase(object):
     def __repr__(self):
 	return '%s(%s)' % (self.__class__.__name__, repr(self.delegate))
 
-    # HACK!: For unittests that examine this attribute
-    # TODO: move all this kind of thing for all classes into fake_pymongo
-    # instead of polluting Motor
-    _BaseObject__set_slave_okay = ReadWriteDelegateProperty()
-    _BaseObject__set_safe       = ReadWriteDelegateProperty()
-
 
 class MotorConnectionBase(MotorBase):
     server_info                 = Async(has_safe_arg=False, cb_required=False)
@@ -401,7 +398,6 @@ class MotorConnectionBase(MotorBase):
 
     def __init__(self, *args, **kwargs):
 	# Store args and kwargs for when open() is called
-	# TODO: document that Motor doesn't do auto_start_request
 	if 'auto_start_request' in kwargs:
 	    raise pymongo.errors.ConfigurationError(
 		"Motor doesn't support auto_start_request, use "
@@ -472,7 +468,6 @@ class MotorConnectionBase(MotorBase):
 	>>> with connection.start_request():
 	...     # unsafe inserts, second one violates unique index on _id
 	...     db.collection.insert({'_id': 1}, callback=next_step)
-	# TODO: update doc, or delete requests entirely from Motor
 	>>> def next_step(result, error):
 	...     db.collection.insert({'_id': 1})
 	...     # call getLastError. Because we're in a request, error() uses
@@ -512,15 +507,21 @@ class MotorConnection(MotorConnectionBase):
     # TODO: auto-gen Sphinx documentation that pulls from PyMongo for all these
     close_cursor                = Async(has_safe_arg=False, cb_required=True)
     kill_cursors                = Async(has_safe_arg=False, cb_required=True)
-    is_locked                   = Async(has_safe_arg=False, cb_required=True)
     fsync                       = Async(has_safe_arg=False, cb_required=False)
     unlock                      = Async(has_safe_arg=False, cb_required=False)
     nodes                       = ReadOnlyDelegateProperty()
     host                        = ReadOnlyDelegateProperty()
     port                        = ReadOnlyDelegateProperty()
 
-    # HACK!: For unittests that examine this attribute
-    _Connection__pool           = ReadOnlyDelegateProperty()
+    # TODO: test directly, doc this difference b/w PyMongo and Motor
+    def is_locked(self, callback):
+	def is_locked(result, error):
+	    if error:
+		callback(None, error)
+	    else:
+		callback(result.get('fsyncLock', 0), None)
+
+	self.admin.current_op(callback=is_locked)
 
     def _new_delegate(self, *args, **kwargs):
 	kwargs['auto_start_request'] = False
@@ -554,6 +555,7 @@ class MotorReplicaSetConnection(MotorConnectionBase):
 
 	return pools
 
+# TODO: doc that this can take MotorConnections or PyMongo Connections
 class MotorMasterSlaveConnection(MotorConnectionBase):
     close_cursor = ReadOnlyDelegateProperty()
 
@@ -644,6 +646,7 @@ class MotorDatabase(MotorBase):
     dereference                   = Async(has_safe_arg=False, cb_required=True)
     eval                          = Async(has_safe_arg=False, cb_required=True)
 
+    # TODO: remove system_js?
     system_js                     = ReadOnlyDelegateProperty()
     incoming_manipulators         = ReadOnlyDelegateProperty()
     incoming_copying_manipulators = ReadOnlyDelegateProperty()
@@ -751,13 +754,13 @@ class MotorCollection(MotorBase):
 	    raise TypeError("First argument to MotorCollection must be "
 			    "MotorDatabase, not %s" % repr(database))
 
-	self._tdb = database
-	self.delegate = pymongo.collection.Collection(self._tdb.delegate, name)
+	self.database = database
+	self.delegate = pymongo.collection.Collection(self.database.delegate, name)
 
     def __getattr__(self, name):
 	# dotted collection name, like foo.bar
 	return MotorCollection(
-	    self._tdb,
+	    self.database,
 	    self.name + '.' + name
 	)
 
@@ -786,7 +789,7 @@ class MotorCollection(MotorBase):
 
 	def inner_cb(result, error):
 	    if isinstance(result, pymongo.collection.Collection):
-		result = self._tdb[result.name]
+		result = self.database[result.name]
 	    callback(result, error)
 
 	sync_method = self.delegate.map_reduce
@@ -796,21 +799,21 @@ class MotorCollection(MotorBase):
     uuid_subtype = ReadWriteDelegateProperty()
 
 
-# TODO: does this need to clone the MotorCursor or could it just return
-#   obj?
-class CallAndReturnClone(DelegateProperty):
+class MotorCursorChainingMethod(DelegateProperty):
     def __get__(self, obj, objtype):
 	# self.name is set by MotorMeta
 	method = getattr(obj.delegate, self.name)
 
+	@functools.wraps(method)
 	def return_clone(*args, **kwargs):
-	    return objtype(method(*args, **kwargs))
+	    method(*args, **kwargs)
+	    return obj
 
 	return return_clone
 
 
 class MotorCursor(MotorBase):
-    # TODO: test all these in test_async.py
+    # TODO: test all these in test_motor_cursor.py
     count                       = Async(has_safe_arg=False, cb_required=True)
     distinct                    = Async(has_safe_arg=False, cb_required=True)
     explain                     = Async(has_safe_arg=False, cb_required=True)
@@ -822,16 +825,16 @@ class MotorCursor(MotorBase):
     alive                       = ReadOnlyDelegateProperty()
     cursor_id                   = ReadOnlyDelegateProperty()
 
-    batch_size                  = CallAndReturnClone()
-    add_option                  = CallAndReturnClone()
-    remove_option               = CallAndReturnClone()
-    limit                       = CallAndReturnClone()
-    skip                        = CallAndReturnClone()
-    max_scan                    = CallAndReturnClone()
-    sort                        = CallAndReturnClone()
-    hint                        = CallAndReturnClone()
-    where                       = CallAndReturnClone()
-    __enter__                   = CallAndReturnClone()
+    batch_size                  = MotorCursorChainingMethod()
+    add_option                  = MotorCursorChainingMethod()
+    remove_option               = MotorCursorChainingMethod()
+    limit                       = MotorCursorChainingMethod()
+    skip                        = MotorCursorChainingMethod()
+    max_scan                    = MotorCursorChainingMethod()
+    sort                        = MotorCursorChainingMethod()
+    hint                        = MotorCursorChainingMethod()
+    where                       = MotorCursorChainingMethod()
+    __enter__                   = MotorCursorChainingMethod()
 
     def __init__(self, cursor):
 	"""
@@ -1019,23 +1022,6 @@ class MotorCursor(MotorBase):
     def __del__(self):
 	if self.alive and self.cursor_id:
 	    self.close()
-
-    # HACK!: For unittests that, extremely regrettably, examine these attributes
-    _Cursor__query_options      = ReadOnlyDelegateProperty()
-    _Cursor__retrieved          = ReadOnlyDelegateProperty()
-    _Cursor__skip               = ReadOnlyDelegateProperty()
-    _Cursor__limit              = ReadOnlyDelegateProperty()
-    _Cursor__timeout            = ReadOnlyDelegateProperty()
-    _Cursor__snapshot           = ReadOnlyDelegateProperty()
-    _Cursor__tailable           = ReadOnlyDelegateProperty()
-    _Cursor__as_class           = ReadOnlyDelegateProperty()
-    _Cursor__slave_okay         = ReadOnlyDelegateProperty()
-    _Cursor__await_data         = ReadOnlyDelegateProperty()
-    _Cursor__partial            = ReadOnlyDelegateProperty()
-    _Cursor__manipulate         = ReadOnlyDelegateProperty()
-    _Cursor__query_flags        = ReadOnlyDelegateProperty()
-    _Cursor__connection_id      = ReadOnlyDelegateProperty()
-    _Cursor__read_preference    = ReadOnlyDelegateProperty()
 
 
 # TODO: test, doc

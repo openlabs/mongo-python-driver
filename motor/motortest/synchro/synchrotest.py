@@ -23,6 +23,7 @@ Motor operation to complete, default 5 seconds.
 """
 
 import sys
+sys.path[0:0] = [""]
 from os import path
 
 import nose

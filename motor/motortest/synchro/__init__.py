@@ -12,8 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Fake synchronous PyMongo implementation built on top of Motor, for the sole
-purpose of checking that Motor passes the same unittests as PyMongo.
+"""Synchro, a fake synchronous PyMongo implementation built on top of Motor,
+for the sole purpose of checking that Motor passes the same unittests as
+PyMongo.
 
 DO NOT USE THIS MODULE.
 """
@@ -31,7 +32,7 @@ from pymongo import son_manipulator
 from pymongo.errors import ConnectionFailure, TimeoutError, OperationFailure
 
 
-# So that synchronous unittests can import these names from fake_pymongo,
+# So that synchronous unittests can import these names from Synchro,
 # thinking it's really pymongo
 from pymongo import (
     ASCENDING, DESCENDING, GEO2D, GEOHAYSTACK, ReadPreference,
@@ -105,22 +106,28 @@ class Sync(object):
 
 def synchronize(self, async_method, has_safe_arg):
     """
-    @param self:                A Fake object, e.g. fake_pymongo Connection
+    @param self:                A Synchro object, e.g. synchro.Connection
     @param async_method:        Bound method of a MotorConnection,
 				MotorDatabase, etc.
     @param has_safe_arg:        Whether the method takes a 'safe' argument
     @return:                    A synchronous wrapper around the method
     """
-    assert isinstance(self, Fake)
+    assert isinstance(self, Synchro)
 
     @functools.wraps(async_method)
     def synchronized_method(*args, **kwargs):
 	assert 'callback' not in kwargs
 
-	# TODO: is this right?
+	try:
+	    base_object_safe = self.delegate.safe
+	except Exception:
+	    # delegate not set yet, or no 'safe' attribute
+	    base_object_safe = False
+
+	# TODO: is this right? Maybe use get_last_error_options()
 	safe_arg_passed = (
 	    'safe' in kwargs or 'w' in kwargs or 'j' in kwargs
-	    or 'wtimeout' in kwargs or getattr(self.delegate, 'safe', False)
+	    or 'wtimeout' in kwargs or base_object_safe
 	)
 
 	if not safe_arg_passed and has_safe_arg:
@@ -131,8 +138,6 @@ def synchronize(self, async_method, has_safe_arg):
 
 	rv = None
 	try:
-	    # TODO: document that all Motor methods accept a callback, but only
-	    # some require them. Get that into Sphinx somehow.
 	    rv = loop_timeout(
 		functools.partial(async_method, *args, **kwargs),
 		name=async_method.func_name
@@ -148,32 +153,99 @@ def synchronize(self, async_method, has_safe_arg):
     return synchronized_method
 
 
-class FakeWrapReturnValue(motor.DelegateProperty):
+def unwrap_synchro(fn):
+    """If first argument to decorated function is a Synchro object, pass the
+    wrapped Motor object into the function.
+    """
+    @functools.wraps(fn)
+    def _unwrap_synchro(self, obj, *args, **kwargs):
+	if isinstance(obj, Synchro):
+	    obj = obj.delegate
+	return fn(self, obj, *args, **kwargs)
+    return _unwrap_synchro
+
+
+def wrap_synchro(fn):
+    """If decorated Synchro function returns a Motor object, wrap in a Synchro
+    object.
+    """
+    @functools.wraps(fn)
+    def _wrap_synchro(*args, **kwargs):
+	motor_obj = fn(*args, **kwargs)
+
+	# Not all Motor classes appear here, only those we need to return
+	# from methods like map_reduce() or create_collection()
+	if isinstance(motor_obj, motor.MotorConnection):
+	    connection = Connection()
+	    connection.delegate = motor_obj
+	    return connection
+	elif isinstance(motor_obj, motor.MotorCollection):
+	    connection = Connection(delegate=motor_obj.database.connection)
+	    database = Database(connection, motor_obj.database.name)
+	    return Collection(database, motor_obj.name)
+	if isinstance(motor_obj, motor.MotorCursor):
+	    return Cursor(motor_obj)
+	else:
+	    return motor_obj
+    return _wrap_synchro
+
+
+class WrapOutgoing(motor.DelegateProperty):
     def __get__(self, obj, objtype):
-	# self.name is set by FakeMeta
-	method = getattr(obj.delegate, self.name)
+	# self.name is set by SynchroMeta
+	motor_method = getattr(obj.delegate, self.name)
+	def synchro_method(*args, **kwargs):
+	    return wrap_synchro(motor_method)(*args, **kwargs)
 
-	def wrap_return_value(*args, **kwargs):
-	    rv = method(*args, **kwargs)
-	    # TODO: check for the other Motor classes and wrap them
-	    # in appropriate Fakes
-	    if isinstance(rv, motor.MotorCursor):
-		return Cursor(rv)
-	    else:
-		return rv
-
-	return wrap_return_value
+	return synchro_method
 
 
-# TODO: change name to "Synchronized"? then the current Synchronized will need
-# to be renamed. But "Fake" sounds too general for what this does, which is
-# specifically to synchronize Motor. I like "Synchro" to extend the "Motor"
-# naming scheme.
-class FakeMeta(type):
+class SynchronizeAndWrapOutgoing(motor.DelegateProperty):
+    def __init__(self, has_safe_arg):
+	self.has_safe_arg = has_safe_arg
+
+    def __get__(self, obj, objtype):
+	# self.name is set by SynchroMeta
+	motor_method = getattr(obj.delegate, self.name)
+	synchro_method = synchronize(obj, motor_method, self.has_safe_arg)
+	return wrap_synchro(synchro_method)
+
+
+class SynchroProperty(object):
+    def __init__(self):
+	self.name = None
+
+    def __get__(self, obj, objtype):
+	# self.name is set by SynchroMeta
+	return getattr(obj.delegate.delegate, self.name)
+
+    def __set__(self, obj, val):
+	# self.name is set by SynchroMeta
+	return setattr(obj.delegate.delegate, self.name, val)
+
+
+class SynchroMeta(type):
+    """This metaclass customizes creation of Synchro's Connection, Database,
+    etc., classes:
+
+    - All asynchronized methods of Motor classes, such as
+      MotorDatabase.command(), are re-synchronized.
+
+    - Properties delegated from Motor's classes to PyMongo's, such as ``name``
+      or ``host``, are delegated **again** from Synchro's class to Motor's.
+
+    - MotorCursor's methods which return a clone of the MotorCursor are wrapped
+      so they return a Synchro Cursor.
+
+    - Certain properties that are included only because PyMongo's unittests
+      access them, such as _BaseObject__set_slave_okay, are simulated.
+    """
+
     def __new__(cls, name, bases, attrs):
-	# Create the class.
+	# Create the class, e.g. the Synchro Connection or Database class
 	new_class = type.__new__(cls, name, bases, attrs)
 
+	# delegate_class is a Motor class like MotorConnection
 	delegate_class = new_class.__delegate_class__
 
 	if delegate_class:
@@ -183,44 +255,47 @@ class FakeMeta(type):
 		delegated_attrs.update(klass.__dict__)
 
 	    for attrname, delegate_attr in delegated_attrs.items():
-		# If attrname is in attrs, it means the Fake has overridden
+		# If attrname is in attrs, it means Synchro has overridden
 		# this attribute, e.g. Database.create_collection which is
-		# special-cased.
+		# special-cased. Ignore such attrs.
 		if attrname not in attrs:
 		    if isinstance(delegate_attr, motor.Async):
 			# Re-synchronize the method
 			sync_method = Sync(attrname, delegate_attr.has_safe_arg)
 			setattr(new_class, attrname, sync_method)
-		    elif isinstance(delegate_attr, motor.CallAndReturnClone):
-			# Wrap Motor objects returned from functions in Fakes
-			wrapper = FakeWrapReturnValue()
+		    elif isinstance(delegate_attr, motor.MotorCursorChainingMethod):
+			# Wrap MotorCursors in Synchro Cursors
+			wrapper = WrapOutgoing()
 			wrapper.name = attrname
 			setattr(new_class, attrname, wrapper)
 		    elif isinstance(delegate_attr, motor.DelegateProperty):
-			# Delegate the property from Fake to Motor
+			# Delegate the property from Synchro to Motor
 			setattr(new_class, attrname, delegate_attr)
 
-	# Set DelegateProperties' names
+	# Set DelegateProperties' and SynchroProperties' names
 	for name, attr in attrs.items():
-	    if isinstance(attr, motor.DelegateProperty):
+	    if isinstance(attr, (motor.DelegateProperty, SynchroProperty)):
 		attr.name = name
 
 	return new_class
 
 
-class Fake(object):
+class Synchro(object):
     """
     Wraps a MotorConnection, MotorDatabase, or MotorCollection and
     makes it act like the synchronous pymongo equivalent
     """
-    __metaclass__ = FakeMeta
+    __metaclass__ = SynchroMeta
     __delegate_class__ = None
 
     def __cmp__(self, other):
 	return cmp(self.delegate, other.delegate)
 
+    _BaseObject__set_slave_okay = SynchroProperty()
+    _BaseObject__set_safe       = SynchroProperty()
 
-class Connection(Fake):
+
+class Connection(Synchro):
     HOST = 'localhost'
     PORT = 27017
 
@@ -233,27 +308,24 @@ class Connection(Fake):
 	# So that TestConnection.test_constants and test_types work
 	self.host = host if host is not None else self.HOST
 	self.port = port if port is not None else self.PORT
-	self.delegate = self.__delegate_class__(
-	    self.host, self.port, *args, **kwargs
-	)
-	self.fake_connect()
+	self.delegate = kwargs.pop('delegate', None)
 
-    def fake_connect(self):
+	if not self.delegate:
+	    self.delegate = self.__delegate_class__(
+		self.host, self.port, *args, **kwargs
+	    )
+	    self.synchro_connect()
+
+    def synchro_connect(self):
 	# Try to connect the MotorConnection before continuing; raise
-	# ConnectionFailure if it doesn't work.
-	exc = ConnectionFailure(
-	    "fake_pymongo.Connection: Can't connect"
-	)
+	# ConnectionFailure if it times out.
+	sync_method = synchronize(self, self.delegate.open, has_safe_arg=False)
+	sync_method()
 
-	loop_timeout(kallable=self.delegate.open, exc=exc)
-
+    @unwrap_synchro
     def drop_database(self, name_or_database):
-	# Special case, since pymongo Connection.drop_database does
-	# isinstance(name_or_database, database.Database)
-	if isinstance(name_or_database, Database):
-	    name_or_database = name_or_database.delegate
-
-	synchronize(self, self.delegate.drop_database, has_safe_arg=False)(name_or_database)
+	synchronize(self, self.delegate.drop_database, has_safe_arg=False)(
+	    name_or_database)
 
     def start_request(self):
 	self.request = self.delegate.start_request()
@@ -263,13 +335,9 @@ class Connection(Fake):
 	if self.request:
 	    self.request.__exit__(None, None, None)
 
-    # TODO: document how this is implemented by Motor; use Motor's
-    # is_locked(callback) instead of current_op(). Can we just delete this
-    # property and it will Just Work?
     @property
     def is_locked(self):
-	ops = self.admin.current_op()
-	return bool(ops.get('fsyncLock', 0))
+	return synchronize(self, self.delegate.is_locked, has_safe_arg=False)()
 
     def __enter__(self):
 	return self
@@ -278,10 +346,13 @@ class Connection(Fake):
 	self.delegate.disconnect()
 
     def __getattr__(self, name):
-	# If this is like connection.db, then wrap the outgoing object in a Fake
+	# If this is like connection.db, then wrap the outgoing object with
+	# Synchro's Database
 	return Database(self, name)
 
     __getitem__ = __getattr__
+
+    _Connection__pool           = SynchroProperty()
 
 
 class ReplicaSetConnection(Connection):
@@ -295,7 +366,7 @@ class ReplicaSetConnection(Connection):
 	    *args, **kwargs
 	)
 
-	self.fake_connect()
+	self.synchro_connect()
 
 
 class MasterSlaveConnection(Connection):
@@ -303,7 +374,7 @@ class MasterSlaveConnection(Connection):
 
     def __init__(self, master, slaves, *args, **kwargs):
 	# MotorMasterSlaveConnection expects MotorConnections or regular
-	# pymongo Connections as arguments, but not Fakes.
+	# pymongo Connections as arguments, rather than Synchro Connections
 	if isinstance(master, Connection):
 	    master = master.delegate
 
@@ -314,26 +385,26 @@ class MasterSlaveConnection(Connection):
 	    master, slaves, *args, **kwargs
 	)
 
-	self.fake_connect()
+	self.synchro_connect()
 
     @property
     def master(self):
-	fake_master = Connection()
-	fake_master.delegate = self.delegate.master
-	return fake_master
+	synchro_master = Connection()
+	synchro_master.delegate = self.delegate.master
+	return synchro_master
 
     @property
     def slaves(self):
-	fake_slaves = []
+	synchro_slaves = []
 	for s in self.delegate.slaves:
-	    fake_connection = Connection()
-	    fake_connection.delegate = s
-	    fake_slaves.append(fake_connection)
+	    synchro_slave = Connection()
+	    synchro_slave.delegate = s
+	    synchro_slaves.append(synchro_slave)
 
-	return fake_slaves
+	return synchro_slaves
 
 
-class Database(Fake):
+class Database(Synchro):
     __delegate_class__ = motor.MotorDatabase
 
     def __init__(self, connection, name):
@@ -353,38 +424,24 @@ class Database(Fake):
 
 	self.delegate.add_son_manipulator(manipulator)
 
-    # TODO: refactor, maybe something like fix_incoming or fix_outgoing?
+    @unwrap_synchro
     def drop_collection(self, name_or_collection):
-	# Special case, since pymongo Database.drop_collection does
-	# isinstance(name_or_collection, collection.Collection)
-	if isinstance(name_or_collection, Collection):
-	    name_or_collection = name_or_collection.delegate
+	sync_method = synchronize(
+	    self, self.delegate.drop_collection, has_safe_arg=False)
+	return sync_method(name_or_collection)
 
-	return synchronize(self, self.delegate.drop_collection, has_safe_arg=False)(name_or_collection)
-
-    # TODO: refactor
+    @unwrap_synchro
     def validate_collection(self, name_or_collection, *args, **kwargs):
-	# Special case, since pymongo Database.validate_collection does
-	# isinstance(name_or_collection, collection.Collection)
-	if isinstance(name_or_collection, Collection):
-	    name_or_collection = name_or_collection.delegate
+	sync_method = synchronize(
+	    self, self.delegate.validate_collection, has_safe_arg=False)
+	return sync_method(name_or_collection, *args, **kwargs)
 
-	return synchronize(self, self.delegate.validate_collection, has_safe_arg=False)(
-	    name_or_collection, *args, **kwargs
-	)
+    @wrap_synchro
+    def create_collection(self, *args, **kwargs):
+	sync_method = synchronize(
+	    self, self.delegate.create_collection, has_safe_arg=False)
 
-    # TODO: refactor
-    def create_collection(self, name, *args, **kwargs):
-	# Special case, since MotorDatabase.create_collection returns a
-	# MotorCollection
-	collection = synchronize(self, self.delegate.create_collection, has_safe_arg=False)(
-	    name, *args, **kwargs
-	)
-
-	if isinstance(collection, motor.MotorCollection):
-	    collection = Collection(self, name)
-
-	return collection
+	return sync_method(*args, **kwargs)
 
     def __getattr__(self, name):
 	return Collection(self, name)
@@ -392,7 +449,7 @@ class Database(Fake):
     __getitem__ = __getattr__
 
 
-class Collection(Fake):
+class Collection(Synchro):
     __delegate_class__ = motor.MotorCollection
 
     def __init__(self, database, name):
@@ -402,22 +459,8 @@ class Collection(Fake):
 	self.delegate = database.delegate[name]
 	assert isinstance(self.delegate, motor.MotorCollection)
 
-    def find(self, *args, **kwargs):
-	# Return a fake Cursor that wraps the MotorCursor
-	return Cursor(self.delegate.find(*args, **kwargs))
-
-    # TODO: refactor
-    def map_reduce(self, *args, **kwargs):
-	# We need to override map_reduce specially, because we have to wrap the
-	# MotorCollection it returns in a fake Collection.
-	rv = loop_timeout(functools.partial(
-	    self.delegate.map_reduce, *args, **kwargs
-	))
-
-	if isinstance(rv, motor.MotorCollection):
-	    return Collection(self.database, rv.name)
-	else:
-	    return rv
+    find       = WrapOutgoing()
+    map_reduce = SynchronizeAndWrapOutgoing(has_safe_arg=False)
 
     def __getattr__(self, name):
 	# Access to collections with dotted names, like db.test.mike
@@ -426,12 +469,15 @@ class Collection(Fake):
     __getitem__ = __getattr__
 
 
-class Cursor(Fake):
+class Cursor(Synchro):
     __delegate_class__ = motor.MotorCursor
 
-    close                               = motor.ReadOnlyDelegateProperty()
-    rewind                              = FakeWrapReturnValue()
-    clone                               = FakeWrapReturnValue()
+    close                      = motor.ReadOnlyDelegateProperty()
+    rewind                     = WrapOutgoing()
+    clone                      = WrapOutgoing()
+    where                      = WrapOutgoing()
+    sort                       = WrapOutgoing()
+    explain                    = SynchronizeAndWrapOutgoing(has_safe_arg=False)
 
     def __init__(self, motor_cursor):
 	self.delegate = motor_cursor
@@ -440,26 +486,33 @@ class Cursor(Fake):
 	return self
 
     def next(self):
-	rv = loop_timeout(self.delegate.each)
+	sync_next = synchronize(self, self.delegate.each, has_safe_arg=False)
+	rv = sync_next()
 	if rv is not None:
 	    return rv
 	else:
 	    raise StopIteration
 
-    # TODO: refactor these
-    def where(self, code):
-	self.delegate.where(code)
-	return self
-
-    def sort(self, *args, **kwargs):
-	self.delegate.sort(*args, **kwargs)
-	return self
-
-    def explain(self):
-	return loop_timeout(self.delegate.explain)
-
     def __getitem__(self, index):
 	if isinstance(index, slice):
 	    return Cursor(self.delegate[index])
 	else:
-	    return loop_timeout(self.delegate[index].each)
+	    sync_next = synchronize(
+		self, self.delegate[index].each, has_safe_arg=False)
+	    return sync_next()
+
+    _Cursor__query_options     = SynchroProperty()
+    _Cursor__retrieved         = SynchroProperty()
+    _Cursor__skip              = SynchroProperty()
+    _Cursor__limit             = SynchroProperty()
+    _Cursor__timeout           = SynchroProperty()
+    _Cursor__snapshot          = SynchroProperty()
+    _Cursor__tailable          = SynchroProperty()
+    _Cursor__as_class          = SynchroProperty()
+    _Cursor__slave_okay        = SynchroProperty()
+    _Cursor__await_data        = SynchroProperty()
+    _Cursor__partial           = SynchroProperty()
+    _Cursor__manipulate        = SynchroProperty()
+    _Cursor__query_flags       = SynchroProperty()
+    _Cursor__connection_id     = SynchroProperty()
+    _Cursor__read_preference   = SynchroProperty()
