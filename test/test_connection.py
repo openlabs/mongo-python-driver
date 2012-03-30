@@ -489,11 +489,9 @@ self.assertEqual(0, len(conn._Connection__pool.sockets))
 	if sys.version_info < (2, 6):
 	    raise SkipTest()
 
-	import contextlib
-
 	# We need exec here because if the Python version is less than 2.6
 	# these with-statements won't even compile.
-        exec """
+	exec """
 with get_connection(auto_start_request=True) as connection:
     connection.pymongo_test.test.find_one()
     # The connection is in a request, so the socket wasn't returned to the
