@@ -19,6 +19,9 @@ import unittest
 
 from tornado import gen, ioloop
 
+import sys
+sys.path[0:0] = "/Users/emptysquare/.virtualenvs/pymongo/mongo-python-driver"
+
 import motor
 from motor.motortest import (
     MotorTest, async_test_engine, host, port, AssertEqual, AssertRaises)
@@ -49,6 +52,49 @@ class MotorCollectionTest(MotorTest):
 	yield motor.Op(coll.remove)
 
     def test_find(self):
+	# 1. Open a connection.
+	#
+	# 2. test_collection has docs inserted in setUp(). Query for documents
+	# with _id 0 through 13, in batches of 5: 0-4, 5-9, 10-13.
+	#
+	# 3. For each document, check if the cursor has been closed. I expect
+	# it to remain open until we've retrieved doc with _id 10. Oddly, Mongo
+	# doesn't close the cursor and return cursor_id 0 if the final batch
+	# exactly contains the last document -- the last batch size has to go
+	# one *past* the final document in order to close the cursor.
+	connection = self.motor_connection(host, port)
+
+	cursor = connection.test.test_collection.find(
+	    {'_id': {'$lt':14}},
+	    {'s': False}, # exclude 's' field
+	    sort=[('_id', 1)],
+	).batch_size(5)
+
+	def callback(doc, error):
+	    if error:
+		raise error
+
+	    if doc:
+		results.append(doc['_id'])
+
+	    if doc and doc['_id'] < 10:
+		self.assertEqual(
+		    1 + self.open_cursors,
+		    self.get_open_cursors()
+		)
+	    else:
+		self.assertEqual(
+		    self.open_cursors,
+		    self.get_open_cursors()
+		)
+
+	results = []
+	cursor.each(callback)
+
+	self.assertEventuallyEqual(range(14), lambda: results)
+
+    @async_test_engine()
+    def test_find_gen(self):
 	# 1. Open a connection.
 	#
 	# 2. test_collection has docs inserted in setUp(). Query for documents
