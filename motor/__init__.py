@@ -444,7 +444,8 @@ class MotorConnectionBase(MotorBase):
 
     def __getattr__(self, name):
         if not self.connected:
-            msg = "Can't access database on %s before calling open()" % (
+            msg = "Can't access database on %s before calling open()" \
+                  " or open_sync()" % (
                 self.__class__.__name__
             )
             raise pymongo.errors.InvalidOperation(msg)
@@ -859,6 +860,43 @@ class MotorCursor(MotorBase):
         async_refresh = asynchronize(self.delegate._refresh, False, True)
         async_refresh(callback=callback)
 
+    def next(self, callback):
+        """Asynchronously retrieve the next document in the result set,
+        fetching a batch of results from the server if necessary.
+
+        # TODO: note that you should close() cursor if you cancel iteration
+        # TODO: prevent concurrent uses of this cursor, as IOStream does, and
+        #   document that and how to avoid it.
+
+        @param callback: function taking (document, error)
+        """
+        check_callable(callback, required=True)
+        add_callback = ioloop.IOLoop.instance().add_callback
+
+        # TODO: simplify, review, comment
+        if self.buffer_size > 0:
+            try:
+                doc = self.delegate.next()
+            except StopIteration:
+                # Special case: limit is 0.
+                # TODO: verify limit 0 is tested.
+                add_callback(functools.partial(callback, None, None))
+                add_callback(self.close)
+                return
+
+            add_callback(functools.partial(callback, doc, None))
+        elif self.alive and (self.cursor_id or not self.started):
+            def got_more(batch_size, error):
+                if error:
+                    callback(None, error)
+                else:
+                    self.next(callback)
+
+            self._get_more(got_more)
+        else:
+            # Complete
+            add_callback(functools.partial(callback, None, None))
+
     def each(self, callback):
         """Iterates over all the documents for this cursor. Return False from
         the callback to stop iteration. each returns immediately, and your
@@ -872,35 +910,15 @@ class MotorCursor(MotorBase):
         check_callable(callback, required=True)
         add_callback = ioloop.IOLoop.instance().add_callback
 
-        # TODO: simplify, review, comment
-        def do_cb(doc):
-            should_continue = callback(doc, None)
+        def next_callback(doc, error):
+            if error:
+                callback(None, error)
+            else:
+                # Quit if callback returns exactly False (not None)
+                if callback(doc, None) is not False:
+                    add_callback(functools.partial(self.each, callback))
 
-            # Quit if callback returns exactly False (not None)
-            if should_continue is not False:
-                add_callback(functools.partial(self.each, callback))
-
-        if self.buffer_size > 0:
-            try:
-                doc = self.delegate.next()
-            except StopIteration:
-                # limit is 0
-                add_callback(functools.partial(callback, None, None))
-                add_callback(self.close)
-                return
-
-            add_callback(functools.partial(do_cb, doc))
-        elif self.alive and (self.cursor_id or not self.started):
-            def got_more(batch_size, error):
-                if error:
-                    callback(None, error)
-                else:
-                    self.each(callback)
-
-            self._get_more(got_more)
-        else:
-            # Complete
-            add_callback(functools.partial(callback, None, None))
+        self.next(next_callback)
 
     def to_list(self, callback):
         """Get a list of documents. The caller is responsible for making sure
@@ -954,6 +972,7 @@ class MotorCursor(MotorBase):
         # TODO: test tailing collection that isn't empty at first
         check_callable(callback, True)
         add_callback = ioloop.IOLoop.instance().add_callback
+        add_timeout = ioloop.IOLoop.instance().add_timeout
 
         cursor = self.clone()
 
@@ -986,10 +1005,13 @@ class MotorCursor(MotorBase):
                     functools.partial(cursor.each, inner_callback)
                 )
             else:
-                # cursor died, start over, but only if it's because this
+                # cursor died, start over soon, but only if it's because this
                 # collection was empty when we began.
                 if not started[0]:
-                    cursor.tail(callback, await_data)
+                    add_timeout(
+                        time.time() + 0.5,
+                        functools.partial(cursor.tail, callback, await_data)
+                    )
                 else:
                     # TODO: why exactly would this happen?
                     exc = pymongo.errors.OperationFailure("cursor died")

@@ -146,8 +146,9 @@ class AssertEqual(gen.Task):
         if error:
             raise error
 
+
         if self.expected != result:
-            raise AssertionError("%s returned %s, not %s" % (
+            raise AssertionError("%s returned %s\nnot\n%s" % (
                 self.func, repr(result), repr(self.expected)))
 
         return result

@@ -51,7 +51,47 @@ class MotorCollectionTest(MotorTest):
 
         yield motor.Op(coll.remove)
 
-    def test_find(self):
+    @async_test_engine()
+    def test_next(self):
+        # 1. Open a connection.
+        #
+        # 2. test_collection has docs inserted in setUp(). Query for documents
+        # with _id 0 through 13, in batches of 5: 0-4, 5-9, 10-13.
+        #
+        # 3. For each document, check if the cursor has been closed. I expect
+        # it to remain open until we've retrieved doc with _id 10. Oddly, Mongo
+        # doesn't close the cursor and return cursor_id 0 if the final batch
+        # exactly contains the last document -- the last batch size has to go
+        # one *past* the final document in order to close the cursor.
+        connection = self.motor_connection(host, port)
+
+        cursor = connection.test.test_collection.find(
+            {'_id': {'$lt':14}},
+            {'s': False}, # exclude 's' field
+            sort=[('_id', 1)],
+        ).batch_size(5)
+
+        results = []
+        while cursor.alive:
+            doc = yield motor.Op(cursor.next)
+
+            if doc:
+                results.append(doc['_id'])
+                if doc['_id'] < 10:
+                    self.assertEqual(
+                        1 + self.open_cursors,
+                        self.get_open_cursors()
+                    )
+            else:
+                break
+
+        self.assertEqual(range(14), results)
+        self.assertEqual(
+            self.open_cursors,
+            self.get_open_cursors()
+        )
+
+    def test_each(self):
         # 1. Open a connection.
         #
         # 2. test_collection has docs inserted in setUp(). Query for documents
@@ -92,50 +132,6 @@ class MotorCollectionTest(MotorTest):
         cursor.each(callback)
 
         self.assertEventuallyEqual(range(14), lambda: results)
-
-    @async_test_engine()
-    def test_find_gen(self):
-        # 1. Open a connection.
-        #
-        # 2. test_collection has docs inserted in setUp(). Query for documents
-        # with _id 0 through 13, in batches of 5: 0-4, 5-9, 10-13.
-        #
-        # 3. For each document, check if the cursor has been closed. I expect
-        # it to remain open until we've retrieved doc with _id 10. Oddly, Mongo
-        # doesn't close the cursor and return cursor_id 0 if the final batch
-        # exactly contains the last document -- the last batch size has to go
-        # one *past* the final document in order to close the cursor.
-        connection = yield motor.Op(motor.MotorConnection(host, port).open)
-
-        cursor = connection.test.test_collection.find(
-            {'_id': {'$lt':14}},
-            {'s': False}, # exclude 's' field
-            sort=[('_id', 1)],
-        ).batch_size(5)
-
-        results = []
-        while True:
-            doc = yield motor.Op(cursor.each)
-
-            if doc:
-                results.append(doc['_id'])
-
-            if doc and doc['_id'] < 10:
-                self.assertEqual(
-                    1 + self.open_cursors,
-                    self.get_open_cursors()
-                )
-            else:
-                self.assertEqual(
-                    self.open_cursors,
-                    self.get_open_cursors()
-                )
-
-            if not doc:
-                # Done iterating
-                break
-
-        self.assertEqual(range(14), results)
 
     @async_test_engine()
     def test_find_where(self):
@@ -239,22 +235,14 @@ class MotorCollectionTest(MotorTest):
         # There are 200 docs, but we canceled after 2
         self.assertEqual(2, len(results))
 
+    @async_test_engine()
     def test_find_to_list(self):
-        cx = self.motor_connection(host, port)
-        results = []
-
-        def callback(docs, error):
-            if error:
-                raise error
-
-            results.extend([doc['_id'] for doc in docs])
-
-        cx.test.test_collection.find(
-            sort=[('_id', 1)], fields=['_id']
-        ).to_list(callback)
-
-        self.assertEventuallyEqual(range(200), lambda: results)
-        ioloop.IOLoop.instance().start()
+        yield AssertEqual(
+            [{'_id': i} for i in range(200)],
+            self.motor_connection(host, port).test.test_collection.find(
+                sort=[('_id', 1)], fields=['_id']
+            ).to_list
+        )
 
     @async_test_engine()
     def test_find_one(self):
