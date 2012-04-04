@@ -29,28 +29,28 @@ import pymongo.errors
 class MotorReplicaSetTest(MotorTest):
     @async_test_engine()
     def test_auto_reconnect_exception_when_read_preference_is_secondary(self):
-	# TODO: find out the repl set name and so on the same way PyMongo's RSC
-	# test does
-	cx = motor.MotorReplicaSetConnection(
-	    'localhost:27017', replicaSet='repl0')
+        # TODO: find out the repl set name and so on the same way PyMongo's RSC
+        # test does
+        cx = motor.MotorReplicaSetConnection(
+            'localhost:27017', replicaSet='repl0')
 
-	yield motor.Op(cx.open)
-	db = cx.pymongo_test
+        yield motor.Op(cx.open)
+        db = cx.pymongo_test
 
-	def raise_socket_error(self, data, callback):
-	    ioloop.IOLoop.instance().add_callback(
-		functools.partial(callback, None, socket.error('foo')))
+        def raise_socket_error(self, data, callback):
+            ioloop.IOLoop.instance().add_callback(
+                functools.partial(callback, None, socket.error('foo')))
 
-	old_write = iostream.IOStream.write
-	iostream.IOStream.write = raise_socket_error
+        old_write = iostream.IOStream.write
+        iostream.IOStream.write = raise_socket_error
 
-	try:
-	    cursor = db.test.find(
-		read_preference=pymongo.ReadPreference.SECONDARY)
+        try:
+            cursor = db.test.find(
+                read_preference=pymongo.ReadPreference.SECONDARY)
 
-	    yield AssertRaises(pymongo.errors.AutoReconnect, cursor.each)
-	finally:
-	    iostream.IOStream.write = old_write
+            yield AssertRaises(pymongo.errors.AutoReconnect, cursor.each)
+        finally:
+            iostream.IOStream.write = old_write
 
 
 if __name__ == '__main__':

@@ -26,22 +26,22 @@ class PuritanicalIOLoop(ioloop.IOLoop):
     A loop that quits when it encounters an Exception.
     """
     def handle_callback_exception(self, callback):
-	exc_type, exc_value, tb = sys.exc_info()
-	traceback.print_tb(tb, file=sys.stderr)
-	raise exc_value
+        exc_type, exc_value, tb = sys.exc_info()
+        traceback.print_tb(tb, file=sys.stderr)
+        raise exc_value
 
 class PuritanicalTest(unittest.TestCase):
     def setUp(self):
-	super(PuritanicalTest, self).setUp()
+        super(PuritanicalTest, self).setUp()
 
-	# Clear previous loop
-	if ioloop.IOLoop.initialized():
-	    loop = ioloop.IOLoop.instance()
-	    if loop:
-		loop.stop()
-	    del ioloop.IOLoop._instance
+        # Clear previous loop
+        if ioloop.IOLoop.initialized():
+            loop = ioloop.IOLoop.instance()
+            if loop:
+                loop.stop()
+            del ioloop.IOLoop._instance
 
-	# So any function that calls IOLoop.instance() gets the
-	# PuritanicalIOLoop instead of the default loop.
-	loop = PuritanicalIOLoop()
-	loop.install()
+        # So any function that calls IOLoop.instance() gets the
+        # PuritanicalIOLoop instead of the default loop.
+        loop = PuritanicalIOLoop()
+        loop.install()

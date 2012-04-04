@@ -33,47 +33,47 @@ from pymongo.errors import ConfigurationError
 
 class MotorSSLTest(MotorTest):
     def test_no_ssl(self):
-	if have_ssl:
-	    raise SkipTest(
-		"We have SSL compiled into Python, can't test what happens "
-		"without SSL"
-	    )
+        if have_ssl:
+            raise SkipTest(
+                "We have SSL compiled into Python, can't test what happens "
+                "without SSL"
+            )
 
-	self.assertRaises(ConfigurationError,
-			  motor.MotorConnection, host, port, ssl=True)
-	# TODO: test same thing with MotorReplicaSetConnection and MMSC
+        self.assertRaises(ConfigurationError,
+                          motor.MotorConnection, host, port, ssl=True)
+        # TODO: test same thing with MotorReplicaSetConnection and MMSC
     #        self.assertRaises(ConfigurationError,
     #            ReplicaSetConnection, ssl=True)
 
     def test_simple_ops(self):
-	# TODO: this is duplicative of test_nested_callbacks_2
-	if not have_ssl:
-	    raise SkipTest()
+        # TODO: this is duplicative of test_nested_callbacks_2
+        if not have_ssl:
+            raise SkipTest()
 
-	loop = ioloop.IOLoop.instance()
-	cx = motor.MotorConnection(host, port, connectTimeoutMS=100, ssl=True)
+        loop = ioloop.IOLoop.instance()
+        cx = motor.MotorConnection(host, port, connectTimeoutMS=100, ssl=True)
 
-	def connected(cx, error):
-	    if error:
-		raise error
+        def connected(cx, error):
+            if error:
+                raise error
 
-	    cx.pymongo_ssl_test.test.insert({'ssl': True}, callback=inserted)
+            cx.pymongo_ssl_test.test.insert({'ssl': True}, callback=inserted)
 
-	def inserted(result, error):
-	    if error:
-		raise error
+        def inserted(result, error):
+            if error:
+                raise error
 
-	    cx.pymongo_ssl_test.test.find_one(callback=found)
+            cx.pymongo_ssl_test.test.find_one(callback=found)
 
-	def found(result, error):
-	    if error:
-		raise error
+        def found(result, error):
+            if error:
+                raise error
 
-	    loop.stop()
-	    cx.drop_database('pymongo_ssl_test')
+            loop.stop()
+            cx.drop_database('pymongo_ssl_test')
 
-	cx.open(connected)
-	loop.start()
+        cx.open(connected)
+        loop.start()
 
 
 if __name__ == '__main__':
