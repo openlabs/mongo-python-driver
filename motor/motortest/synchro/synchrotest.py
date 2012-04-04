@@ -116,33 +116,33 @@ class SynchroNosePlugin(Plugin):
     name = 'synchro'
 
     def __init__(self, *args, **kwargs):
-	# We need a standard Nose selector in order to filter out methods that
-	# don't match TestSuite.test_*
-	self.selector = Selector(config=None)
-	super(SynchroNosePlugin, self).__init__(*args, **kwargs)
+        # We need a standard Nose selector in order to filter out methods that
+        # don't match TestSuite.test_*
+        self.selector = Selector(config=None)
+        super(SynchroNosePlugin, self).__init__(*args, **kwargs)
 
     def configure(self, options, conf):
-	super(SynchroNosePlugin, self).configure(options, conf)
-	# TODO: Figure out less hacky way to enable this plugin
-	# programmatically with Nose
-	self.enabled = True
+        super(SynchroNosePlugin, self).configure(options, conf)
+        # TODO: Figure out less hacky way to enable this plugin
+        # programmatically with Nose
+        self.enabled = True
 
     def wantModule(self, module):
-	return module.__name__ not in excluded_modules
+        return module.__name__ not in excluded_modules
 
     def wantMethod(self, method):
-	# Run standard Nose checks on name, like "does it start with test_"?
-	if not self.selector.matches(method.__name__):
-	    return False
+        # Run standard Nose checks on name, like "does it start with test_"?
+        if not self.selector.matches(method.__name__):
+            return False
 
-	for excluded_name in excluded_tests:
-	    suite_name, method_name = excluded_name.split('.')
-	    if ((method.im_class.__name__ == suite_name or suite_name == '*')
-		and method.__name__ == method_name
-	    ):
-		return False
+        for excluded_name in excluded_tests:
+            suite_name, method_name = excluded_name.split('.')
+            if ((method.im_class.__name__ == suite_name or suite_name == '*')
+                and method.__name__ == method_name
+            ):
+                return False
 
-	return True
+        return True
 
 
 if __name__ == '__main__':
@@ -154,16 +154,16 @@ if __name__ == '__main__':
     sys.modules['pymongo'] = synchro
 
     for submod in [
-	'connection',
-	'collection',
-	'master_slave_connection',
-	'replica_set_connection',
-	'database',
-	'pool',
+        'connection',
+        'collection',
+        'master_slave_connection',
+        'replica_set_connection',
+        'database',
+        'pool',
     ]:
-	# So that 'from pymongo.connection import Connection' gets the Synchro
-	# Connection, not the real one.
-	sys.modules['pymongo.%s' % submod] = synchro
+        # So that 'from pymongo.connection import Connection' gets the Synchro
+        # Connection, not the real one.
+        sys.modules['pymongo.%s' % submod] = synchro
 
     # Find our directory
     this_dir = path.dirname(__file__)
@@ -180,11 +180,11 @@ if __name__ == '__main__':
     print 'WARNING: excluding some tests -- go in and fix them for async!'
 
     config = Config(
-	plugins=PluginManager(),
+        plugins=PluginManager(),
     )
 
     nose.main(
-	config=config,
-	addplugins=[SynchroNosePlugin()],
-	defaultTest=test_dir,
+        config=config,
+        addplugins=[SynchroNosePlugin()],
+        defaultTest=test_dir,
     )
