@@ -305,8 +305,6 @@ def asynchronize(sync_method, has_safe_arg, cb_required):
                 raise error
 
         # Start running the operation on a greenlet
-        # TODO: a possible optimization that doesn't start a greenlet if no
-        # callback -- probably not a significant improvement....
         greenlet.greenlet(call_method).switch()
 
     return method
@@ -750,13 +748,16 @@ class MotorCollection(MotorBase):
     inline_map_reduce       = Async(has_safe_arg=False, cb_required=True)
     find_one                = Async(has_safe_arg=False, cb_required=True)
 
+    uuid_subtype            = ReadWriteDelegateProperty()
+
     def __init__(self, database, name, *args, **kwargs):
         if not isinstance(database, MotorDatabase):
             raise TypeError("First argument to MotorCollection must be "
                             "MotorDatabase, not %s" % repr(database))
 
         self.database = database
-        self.delegate = pymongo.collection.Collection(self.database.delegate, name)
+        self.delegate = pymongo.collection.Collection(
+            self.database.delegate, name)
 
     def __getattr__(self, name):
         # dotted collection name, like foo.bar
@@ -771,13 +772,13 @@ class MotorCollection(MotorBase):
         """
         if 'callback' in kwargs:
             raise pymongo.errors.ConfigurationError(
-                "Pass a callback to each, to_list, count, or tail, not to find"
+                "Pass a callback to next, each, to_list, count, or tail, not"
+                " to find"
             )
 
         cursor = self.delegate.find(*args, **kwargs)
         return MotorCursor(cursor)
 
-    # TODO: refactor
     def map_reduce(self, *args, **kwargs):
         # We need to override map_reduce specially, rather than simply
         # include it in async_ops, because we have to wrap the Collection it
@@ -788,16 +789,14 @@ class MotorCollection(MotorBase):
             kwargs = kwargs.copy()
             del kwargs['callback']
 
-        def inner_cb(result, error):
+        def map_reduce_callback(result, error):
             if isinstance(result, pymongo.collection.Collection):
                 result = self.database[result.name]
             callback(result, error)
 
         sync_method = self.delegate.map_reduce
         async_mr = asynchronize(sync_method, False, True)
-        async_mr(*args, callback=inner_cb, **kwargs)
-
-    uuid_subtype = ReadWriteDelegateProperty()
+        async_mr(*args, callback=map_reduce_callback, **kwargs)
 
 
 class MotorCursorChainingMethod(DelegateProperty):
@@ -913,10 +912,13 @@ class MotorCursor(MotorBase):
         def next_callback(doc, error):
             if error:
                 callback(None, error)
-            else:
+            elif doc:
                 # Quit if callback returns exactly False (not None)
                 if callback(doc, None) is not False:
                     add_callback(functools.partial(self.each, callback))
+            else:
+                # Complete
+                add_callback(functools.partial(callback, None, None))
 
         self.next(next_callback)
 

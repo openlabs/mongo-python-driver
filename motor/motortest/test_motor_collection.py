@@ -152,12 +152,11 @@ class MotorCollectionTest(MotorTest):
     def test_find_callback(self):
         cx = self.motor_connection(host, port)
         cursor = cx.test.test_collection.find()
+        self.check_required_callback(cursor.next)
         self.check_required_callback(cursor.each)
+        self.check_required_callback(cursor.to_list)
 
         # Ensure tearDown doesn't complain about open cursors
-        self.wait_for_cursors()
-
-        self.check_required_callback(cursor.to_list)
         self.wait_for_cursors()
 
     def test_find_is_async(self):

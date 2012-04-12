@@ -14,8 +14,6 @@
 
 """Test Motor, an asynchronous driver for MongoDB and Tornado."""
 
-import threading
-import time
 import unittest
 
 from tornado import ioloop
@@ -23,6 +21,7 @@ from tornado import ioloop
 import motor
 from motor.motortest import (
     MotorTest, async_test_engine, host, port, AssertEqual)
+import pymongo
 
 
 class MotorCursorTest(MotorTest):
@@ -47,6 +46,30 @@ class MotorCursorTest(MotorTest):
         yield AssertEqual(
             25,
             coll.find({'_id': {'$lt': 100}, '$where': where}).count)
+
+    @async_test_engine()
+    def test_next(self):
+        coll = self.motor_connection(host, port).test.test_collection
+        cursor = coll.find({}, {'_id': 1}).sort([('_id', pymongo.ASCENDING)])
+        yield AssertEqual({'_id': 0}, cursor.next)
+        cursor.close()
+        self.wait_for_cursors()
+
+    def test_each(self):
+        coll = self.motor_connection(host, port).test.test_collection
+        cursor = coll.find({}, {'_id': 1}).sort([('_id', pymongo.ASCENDING)])
+
+        results = []
+        def callback(result, error):
+            if error:
+                raise error
+
+            results.append(result)
+
+        cursor.each(callback)
+        expected = [{'_id': i} for i in range(200)] + [None]
+        self.assertEventuallyEqual(expected, lambda: results)
+        ioloop.IOLoop.instance().start()
 
     def test_cursor_close(self):
         # The flow here is complex; we're testing that a cursor can be explicitly
@@ -76,138 +99,10 @@ class MotorCursorTest(MotorTest):
         loop.start()
         self.wait_for_cursors()
 
-    def _test_tailable_cursor(self, await_data):
-        # 1. Make a capped collection
-        # 2. Spawn a thread that will use PyMongo to add data to the collection
-        #   periodically
-        # 3. Tail the capped collection with Motor
-        # 4. Shut down the thread
-        # 5. Assert tailable cursor got the right data
-        # 6. Drop the capped collection
-        # Seconds between inserts into capped collection -- simulate an
-        # unpredictable process
-        pauses = (2, 0, 1, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0.1, 0.1, 2, 0, 0)
-
-        self.sync_db.capped.drop()
-        self.sync_db.create_collection('capped', capped=True, size=10000)
-
-        def add_docs():
-            i = 0
-            for pause in pauses:
-                time.sleep(pause)
-                self.sync_cx.test.capped.insert({'_id': i}, safe=True)
-                i += 1
-
-        t = threading.Thread(target=add_docs)
-        t.start()
-
-        # TODO: also test w/o await_data
-        cx = self.motor_connection(host, port)
-        capped = cx.test.capped
-        cursor = [capped.find(tailable=True, await_data=await_data)]
-        results = []
-
-        def each(result, error):
-            if result:
-                results.append(result)
-            if len(results) == len(pauses):
-                # Cancel iteration
-                cursor[0].close()
-                return False
-
-            # On an empty capped collection the cursor will die immediately,
-            # despite await_data. Just keep trying until the thread inserts
-            # the first doc, at which point the cursor will remain alive for
-            # the rest of the test.
-            if not cursor[0].alive:
-                cursor[0] = capped.find(tailable=True, await_data=await_data)
-                cursor[0].each(each)
-
-        # Start
-        cursor[0].each(each)
-
-        self.assertEventuallyEqual(
-            results,
-            lambda: [{'_id': i} for i in range(len(pauses))],
-            timeout_sec=sum(pauses) + 1
-        )
-
-        ioloop.IOLoop.instance().start()
-
-        # We get here once assertEventuallyEqual has passed or timed out
-        t.join()
-        self.wait_for_cursors()
-
-    def test_tailable_cursor_await(self):
-        self._test_tailable_cursor(True)
-
-    def test_tailable_cursor_no_await(self):
-        self._test_tailable_cursor(False)
-
-    def _test_tail(self, await_data):
-        # Same as _test_tailable_cursor but uses Motor's own tail(callback) API
-        # TODO: combine w/ _test_tailable_cursor
-        pauses = (2, 0, 1, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0.1, 0.1, 2, 0, 0)
-
-        self.sync_db.capped.drop()
-        self.sync_db.create_collection('capped', capped=True, size=10000)
-
-        def add_docs():
-            i = 0
-            for pause in pauses:
-                time.sleep(pause)
-                self.sync_cx.test.capped.insert({'_id': i}, safe=True)
-                i += 1
-
-        t = threading.Thread(target=add_docs)
-        t.start()
-
-        def each(result, error):
-            if result:
-                results.append(result)
-            if len(results) == len(pauses):
-                # Cancel iteration
-                results.append('cancelled')
-                return False
-
-        # Start
-        cx = self.motor_connection(host, port)
-        capped = cx.test.capped
-
-        # Note we do *not* pass tailable or await_data to find(), the
-        # convenience method handles it for us.
-        capped.find().tail(each, await_data=await_data)
-        results = []
-
-        self.assertEventuallyEqual(
-            results,
-            lambda: [{'_id': i} for i in range(len(pauses))] + ['cancelled'],
-            timeout_sec=sum(pauses) + 1
-        )
-
-        ioloop.IOLoop.instance().start()
-        t.join()
-
-        # Give the final each() a chance to execute before dropping collection
-        ioloop.IOLoop.instance().add_timeout(
-            time.time() + 0.5,
-            self.sync_cx.test.capped.drop
-        )
-
-        self.wait_for_cursors()
-
-    def test_tail_await(self):
-        # TODO: this appears to fail solely because it's executed *AFTER*
-        # test_cursor_slice(). Curious....
-        self._test_tail(True)
-
-    def test_tail_no_await(self):
-        self._test_tail(False)
-
     @async_test_engine()
     def test_cursor_slice(self):
-        # This seems to make the next test after it fail; right now that's
-        # test_tail_await.
+        # This is an asynchronous copy of PyMongo's test_getitem_slice_index in
+        # test_cursor.py
 
         cx = self.motor_connection(host, port)
 

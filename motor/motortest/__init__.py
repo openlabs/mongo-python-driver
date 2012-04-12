@@ -176,9 +176,7 @@ class MotorTest(
         # Make some test data
         self.sync_coll.ensure_index([('s', pymongo.ASCENDING)], unique=True)
         self.sync_coll.insert(
-            [{'_id': i, 's': hex(i)} for i in range(200)],
-                                                         safe=True
-        )
+            [{'_id': i, 's': hex(i)} for i in range(200)], safe=True)
 
         self.open_cursors = self.get_open_cursors()
 
